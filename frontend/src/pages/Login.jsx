@@ -1,135 +1,121 @@
-import React, { useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
-import { useAuth } from "../utils/auth";
 
-export default function Login() {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import api, { login as apiLogin, refreshAccess, getCurrentUser } from "./axios"; // adjust path if needed
 
-  const [showInvalidUserModal, setShowInvalidUserModal] = useState(false);
+const AuthContext = createContext(null);
 
-  const { login } = useAuth();
-  const nav = useNavigate();
-  const location = useLocation();
-  const from = location.state?.from?.pathname || "/dashboard";
+export function AuthProvider({ children }) {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loadingUser, setLoadingUser] = useState(true);
+  const navigate = useNavigate();
 
-  const closeModal = () => {
-    setShowInvalidUserModal(false);
+  // helper to set tokens in localStorage (api.interceptors.request already reads access_token)
+  const setTokens = ({ access, refresh }) => {
+    if (access) localStorage.setItem("access_token", access);
+    if (refresh) localStorage.setItem("refresh_token", refresh);
   };
 
-  const submit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-    setShowInvalidUserModal(false);
+  const clearTokens = () => {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+  };
 
+  const loadUser = useCallback(async () => {
+    setLoadingUser(true);
     try {
-      await login(username.trim(), password);
-      nav(from, { replace: true });
+      const user = await getCurrentUser();
+      setCurrentUser(user);
     } catch (err) {
-      const resp = err?.response;
-      const data = resp?.data;
-      const status = resp?.status;
-      const msg =
-        (data && (data.detail || data.message || JSON.stringify(data))) ||
-        err.message ||
-        "Login failed";
-
-      if (status === 404 || /not.*found|no.*account|not.*registered/i.test(String(msg))) {
-        setShowInvalidUserModal(true);
+      // If 401, tokens may be missing/invalid — try refresh once
+      if (err && err.status === 401) {
+        try {
+          await refreshAccess();
+          const user = await getCurrentUser();
+          setCurrentUser(user);
+        } catch (err2) {
+          clearTokens();
+          setCurrentUser(null);
+        }
       } else {
-        setError(msg);
+        setCurrentUser(null);
       }
     } finally {
-      setLoading(false);
+      setLoadingUser(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // initial load of current user on mount
+    loadUser();
+
+    // Response interceptor: if we get a 401, attempt refresh once then retry original request
+    const interceptor = api.interceptors.response.use(
+      (resp) => resp,
+      async (error) => {
+        const original = error.config;
+        // avoid infinite loop: only try once per request
+        if (
+          error.response &&
+          error.response.status === 401 &&
+          !original._retry &&
+          localStorage.getItem("refresh_token")
+        ) {
+          original._retry = true;
+          try {
+            const newAccess = await refreshAccess();
+            // set Authorization header for original request and retry
+            original.headers["Authorization"] = `Bearer ${newAccess}`;
+            return api(original);
+          } catch (refreshErr) {
+            // refresh failed: log out
+            clearTokens();
+            setCurrentUser(null);
+            return Promise.reject(refreshErr);
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      api.interceptors.response.eject(interceptor);
+    };
+  }, [loadUser]);
+
+  // wrapper used by your Login component
+  const login = async (usernameOrEmail, password) => {
+    // call the API login helper which returns { access, refresh }
+    const tokens = await apiLogin(usernameOrEmail, password);
+    // tokens may be resp.data; ensure we set them
+    setTokens(tokens);
+    // fetch the current user after login
+    await loadUser();
+    return tokens;
+  };
+
+  const logout = (opts = {}) => {
+    clearTokens();
+    setCurrentUser(null);
+    if (opts.redirect !== false) {
+      navigate("/login");
     }
   };
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 to-white px-4">
-      <div className="w-full max-w-md">
-        <div className="bg-white shadow-lg rounded-2xl p-8">
-          <h2 className="text-2xl font-bold text-gray-800 mb-6">Sign in</h2>
+  const value = {
+    currentUser,
+    loadingUser,
+    isAuthenticated: !!currentUser,
+    login,
+    logout,
+    reloadUser: loadUser,
+  };
 
-          <form onSubmit={submit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="your username"
-                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                required
-                autoComplete="username"
-              />
-            </div>
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-              <input
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="your password"
-                type="password"
-                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                required
-                autoComplete="current-password"
-              />
-            </div>
-
-            {error && (
-              <div className="rounded-md bg-red-50 border border-red-100 p-3 text-sm text-red-700">
-                {String(error)}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-white font-semibold transition transform ${
-                loading
-                  ? "bg-indigo-400 cursor-wait"
-                  : "bg-gradient-to-r from-indigo-600 to-indigo-800 hover:scale-[1.01]"
-              }`}
-            >
-              {loading ? "Signing in..." : "Sign in"}
-            </button>
-          </form>
-        </div>
-      </div>
-
-      {showInvalidUserModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4" aria-modal="true" role="dialog">
-          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={closeModal} />
-          <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 z-10">
-            <div className="flex items-start justify-between">
-              <h3 className="text-lg font-semibold text-gray-800">Invalid User</h3>
-              <button
-                onClick={closeModal}
-                className="text-gray-400 hover:text-gray-600"
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="mt-4 text-gray-600">
-              The username you entered is not a valid user in our system.
-            </p>
-
-            <div className="mt-6 flex justify-end">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white font-medium hover:opacity-95"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used inside AuthProvider");
+  return ctx;
 }
