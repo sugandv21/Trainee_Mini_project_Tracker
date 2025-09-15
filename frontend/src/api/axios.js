@@ -1,9 +1,9 @@
-// src/auth.js
+
 import axios from "axios";
 
 // Prefer env var (set VITE_API_BASE_URL in Vercel). Fallback to the deployed backend for quick testing.
 const BACKEND =
-  (import.meta.env.VITE_API_BASE_URL || "https://trainee-mini-project-tracker-8btp.onrender.com")
+  (import.meta.env.VITE_API_BASE_URL || "https://trainee-mini-project-tracker-8btp.onrender.com/api")
     .replace(/\/+$/, "");
 
 export async function login(emailOrUsername, password) {
@@ -71,3 +71,4 @@ export async function refreshAccess() {
     return Promise.reject({ message: err.message || "Network error", network: true });
   }
 }
+
