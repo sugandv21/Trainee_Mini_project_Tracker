@@ -27,9 +27,11 @@ urlpatterns = [
     path("token/", TokenObtainPairView.as_view(), name="token_obtain_pair_short"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh_short"),
     path("api/", include("tracker.urls")),
+    path("me/", MeView.as_view(), name="me_top"),
 ]
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
 
 
